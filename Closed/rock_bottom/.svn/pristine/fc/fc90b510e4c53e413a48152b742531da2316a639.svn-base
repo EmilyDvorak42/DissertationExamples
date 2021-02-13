@@ -1,0 +1,43 @@
+This directory contains the basic files you would need to add a new detector to rock_bottom
+
+---------------------------------------------------------------------------------------------
+Here is a list of steps you should take if you want to implement a new detector:
+
+1) Choose a detector name and be consistent. In this example we will use "MyDet".
+2) Add your detector type to the enum in ./public/rock_bottom/I3RbUltilties.h (and the pybinding)
+
+3) Open ./public/rock_bottom/interface/I3RbLikelihoodBase.h and add DECLARE_WRAPPED(MyDet) where you see the other calls (crtl+f)
+4) Make a new folder for your detector's cxx files (ex: ./private/rock_bottom/interface/mydet) 
+5) Make your own I3MyDetBaseLikelihood.cxx in this directory (and rename as needed)
+6) Open ./private/rock_bottom/interface/I3RbLikelihoodBase.cxx and...
+   6a) Add a call ConstructMyDet in the constructor, AKA I3RbLikelihoodBase::I3RbLikelihoodBase 
+   6b) Add your detector to all the switches. Each function except the constructor should have a switch that points to your function.
+
+7) Open ./public/rock_bottom/interface/I3RbLDFLikelihood.h and add a DECLARE_WRAPPED(MyDet) call for your detector type
+8) Make your own I3MyDetLDFLikelihood.cxx in your detector's directory like before
+
+9) Open ./public/rock_bottom/interface/I3RbTimingLikelihood.h and add a DECLARE_WRAPPED(MyDet) call for your detector type
+10) Make your own I3MyDetTimingLikelihood.cxx in your detector's directory like before
+
+11) Actually do all the hard work of coding up your new likelihood
+
+NOTE: You will need to change all of the function names from MyDet to whatever you called your detector
+NOTE: When you recompile rock_bottom you will have to do a "make rebuild_cache" for cmake to find your new cxx files
+
+---------------------------------------------------------------------------------------------
+Here is a list of steps you should take if you want to implement a new signal model:
+
+1) Make a new directory for your detector: ./public/rock_bottom/models/mydet and ./private/rock_bottom/models/mydet
+
+2) Copy the SkeletonSignalModel.h to ./public/rock_bottom/models
+3) Rename all the functions from "Skeleton" to whatever you model is called
+
+4) Copy SkeletonSignalModel.cxx to ./private/rock_bottom/models
+5) Rename all the functions from "Skeleton" to whatever you model is called
+
+6) Actually do all the hard work of coding up your new model
+
+7) Copy the skeleton for the pybindings SkeletonSignalModelPy.cxx to ./private/pybindings and change the names to your signal model name
+
+NOTE: You will need to change the #include in your version of SkeletonSignalModel.cxx to point to your version of SkeletonSignalModel.h
+NOTE: When you recompile rock_bottom you will have to do a "make rebuild_cache" for cmake to find your new cxx files

@@ -1,0 +1,322 @@
+/**
+ * copyright  (C) 2011
+ *
+ * The Icecube Collaboration
+ *
+ * $Id: I3LaputopSignalModel.cxx 173728 2019-06-04 17:46:14Z dsoldin $
+ *
+ * \file I3LaputopSignalModel.cxx
+ *
+ * \author Javier Gonzalez
+ * \date 28 Jan 2013
+ * \version $Revision: 173728 $
+ * Last changed by $LastChangedBy: dsoldin $ on $LastChangedDate: 2019-06-04 12:46:14 -0500 (Tue, 04 Jun 2019) $
+ */
+
+static const char CVSId[] =
+"$Id: I3LaputopSignalModel.cxx 173728 2019-06-04 17:46:14Z dsoldin $";
+
+#include <rock_bottom/models/icetop/I3LaputopSignalModel.h>
+#include <rock_bottom/I3RbUtilities.h>
+#include <icetray/I3SingleServiceFactory.h>
+
+typedef I3SingleServiceFactory<I3LaputopSignalModel, I3RbSignalModel> LaputopSignalModel;
+I3_SERVICE_FACTORY(LaputopSignalModel);
+
+using std::string;
+using std::pow;
+using std::exp;
+using std::log10;
+using std::log;
+
+I3LaputopSignalModel::I3LaputopSignalModel(const I3Context &c):
+  I3RbSignalModel(c),
+  parameter_names_(rock_bottom::GetNParameters()),
+  default_parameters_(rock_bottom::GetNParameters())
+{
+  rock_bottom::FillParameterNames(parameter_names_); 
+  AddParameter("r_ref", "Reference radius", 125.*I3Units::m);
+  AddParameter("LDF", "LDF service to use", "");
+  AddParameter("SnowService", "Name of snow service", "");
+}
+
+
+I3LaputopSignalModel::I3LaputopSignalModel(const std::string &name):
+  I3RbSignalModel(name),
+  parameter_names_(rock_bottom::GetNParameters()),
+  default_parameters_(rock_bottom::GetNParameters())
+{
+  AddParameter("r_ref", "Reference radius", 125.*I3Units::m);
+  AddParameter("LDF", "LDF service to use", "");
+  AddParameter("SnowService", "Name of snow service", "");
+}
+
+
+void I3LaputopSignalModel::Configure() {
+  log_info("Configuring signal model (%s)", GetName().c_str());
+  GetParameter("r_ref", default_parameters_[5]);
+  //GetParameter("r_ref", new_r_ref);
+  GetParameter( "LDF",  fLDF);
+  string snow_service;
+  GetParameter( "SnowService",  snow_service);
+  if (context_.Has< I3SnowCorrectionServiceBase >( snow_service )) {
+    snow_service_ = context_.Get< I3SnowCorrectionServiceBasePtr >(snow_service);
+  }
+}
+
+
+double I3LaputopSignalModel::GetSignalLogProbability(
+  const I3RockBall& ball,
+  const I3EventHypothesis& hypo,
+  double signal) const {
+  
+    /*
+ 	*  Here is the likelihood calculation for IceTop LDF function
+ 	*  The actual function choosen is called through GetLogSignal
+ 	*  Snow is taken to account if boolean is declared true
+ 	*  With proper options - it is exaclty the same as Laputop from toprec
+    */ 
+    
+  const I3TankGeo tankGeo = *(ball.GetTankGeo());
+  const I3VEMCalibration vemCalib = *(ball.GetVEMCalibration());
+  const I3Position pos = *(ball.GetPosition());
+  const bool saturated = ball.GetSaturatedStatus();
+  const double rho = rock_bottom::GetDistToAxis(*particle_, pos);
+  double expectedSignal = fLDF->GetLogSignal(rho, 0, false, ldf_parameters_);
+  //ldf_parameters_->SetParameterByName("r_ref",default_parameters_[5]); 
+  const double core_radius_ = std::max(5.0,ldf_parameters_->GetParameterByName("r_ref") *
+  pow(10, -ldf_parameters_->GetParameterByName("Beta")/(2.*ldf_parameters_->GetParameterByName("Kappa"))));
+
+  double sigma = 0;
+  if (snow_service_) {
+    if (!saturated) {
+      const double snow_depth = tankGeo.snowheight;
+      expectedSignal = snow_service_->CalculateAttenuatedLogS(expectedSignal, pos, snow_depth, hypo.particle,ldf_parameters_);
+    }
+  }
+  if (rho >= core_radius_) {
+    sigma = GetTopSigmaSignal(expectedSignal, rho);
+  } else {
+    sigma = GetTopSigmaSignal(expectedSignal, core_radius_);
+  }
+  if (saturated){
+    const double sigma_sat = GetTopSigmaSignal(expectedSignal, rho);
+    const double SAT_LG = 90000.;
+    const double pe_per_vem = vemCalib.pePerVEM/vemCalib.corrFactor;
+    const double lg_sat = SAT_LG/pe_per_vem;
+    const double logsat = log10(SAT_LG/pe_per_vem);
+    //const double p_sat = log(0.5*(1.- erf((logsat-log10(signal))/sqrt(2.)/sigma_sat) ));
+    const double p_sat = 0.5*(1.- erf((logsat-log10(signal))/sqrt(2.)/sigma_sat) );
+    return p_sat;
+  } else {
+    //const double delta = (log10(signal) - expectedSignal)/(2.*sigma);
+    const double delta = (log10(signal) - expectedSignal)/(sigma);
+    const double llh = delta*delta/2.+log(sigma);
+    //llh_hlc += local_delta_q*local_delta_q/2.+log(local_sigma_q);
+    // Why not?
+    //const double llh = -delta*delta / (2*sigma*sigma) - log(sigma) - 0.5 * log(2*M_PI);
+    return -llh;
+  }
+}
+
+
+// Get log(signal) from the provided LDF, NKG or DLP
+double I3LaputopSignalModel::GetLogSignalMean(const I3RockBall& ball) const {
+
+  // THIS FUNCTION IS NOT USED!
+  
+  const I3Position pos = *(ball.GetPosition());  
+  const double rho = rock_bottom::GetDistToAxis(*particle_, pos);
+  return fLDF->GetLogSignal(rho, 0, false, ldf_parameters_);
+}
+
+
+// Get hit probability from the provided ERF function 
+double I3LaputopSignalModel::GetHitProbability(const I3RockBall& ball) const {
+
+  const double logvem_threshold = log10(0.1657);
+  const I3Position pos = *(ball.GetPosition()); 
+  const I3TankGeo tankGeo = *(ball.GetTankGeo());
+  const double rho = rock_bottom::GetDistToAxis(*particle_, pos);
+  double expectedSignal = fLDF->GetLogSignal(rho, 0, false, ldf_parameters_);
+  if (snow_service_) {
+    const double snow_depth = tankGeo.snowheight;	
+    expectedSignal = snow_service_->CalculateAttenuatedLogS(expectedSignal, pos, snow_depth, particle_, ldf_parameters_);
+  }
+  const double local_sigma = GetTopSigmaSignal(expectedSignal, rho);
+  //const double p_hit = 0.5*(1. + erf((logvem_threshold-expectedSignal)/sqrt(2.)/local_sigma));
+      //double local_p_nohit = 0.5*(boost::math::erf((logvem_threshold-local_ldf)/sqrt(2.)/local_sigma)+1.);
+      // prob. to find that DOM with a pulse
+      //double local_p_hit = 1.-local_p_nohit;
+  const double p_hit = 1.-(0.5*(erf((logvem_threshold-expectedSignal)/sqrt(2.)/local_sigma)+1.));
+  return p_hit;
+}
+
+
+double I3LaputopSignalModel::GetSignalProbability(
+  const I3RockBall& ball,
+  const I3EventHypothesis& hypo,
+  double signal) const {
+  
+  // THIS FUNCTION IS NOT USED!
+  
+  return exp(GetSignalLogProbability(ball, hypo, signal));
+}
+
+double I3LaputopSignalModel::GetSignalLogCumulativeProbability(
+  const I3RockBall& ball,
+  const I3EventHypothesis& hypo,
+  double signal) const {
+  
+  return GetSignalLogProbability(ball, hypo, signal);
+}
+
+
+double I3LaputopSignalModel::GetSignalCumulativeProbability(
+  const I3RockBall& ball,
+  const I3EventHypothesis& hypo,
+  double signal) const {
+    
+  const I3TankGeo tankGeo = *(ball.GetTankGeo());
+  const I3Position pos = *(ball.GetPosition());
+  
+  const double rho = rock_bottom::GetDistToAxis(*particle_, pos);
+  double expectedSignal = fLDF->GetLogSignal(rho, 0, false, ldf_parameters_);	
+  if (snow_service_) {
+    const double snow_depth = tankGeo.snowheight;	
+    expectedSignal = snow_service_->CalculateAttenuatedLogS(expectedSignal, pos, snow_depth, hypo.particle, ldf_parameters_);
+  }
+  double sigma = GetTopSigmaSignal(std::max(expectedSignal, log10(0.1657)), rho);
+  double local_p_nohit = 0.5*(erf((log10(0.1657) - expectedSignal)/sqrt(2.)/sigma)+1.);
+  double local_p_hit = 1.0 - local_p_nohit;
+  double local_station_hit = 	pow((local_p_hit),2.);
+  return local_station_hit;
+}
+
+
+double I3LaputopSignalModel::GetSignalMean(const I3RockBall& ball) const {
+  /*
+    The underlying model _assumes_ log-normal distributions.
+    This would be the corresponding mean. That does not make it right.
+    
+    THIS FUNCTION IS NOT USED!
+  
+  */
+  return pow(10, GetLogSignalMean(ball));
+}
+
+
+double I3LaputopSignalModel::GetSignalVariance(const I3RockBall& ball) const {
+
+
+  //THIS FUNCTION IS NOT USED!
+  
+  // This is actually sigma. This is OK.
+  const I3Position pos = *(ball.GetPosition());
+  const double rho = rock_bottom::GetDistToAxis(*particle_, pos);
+  const double zenith = particle_->GetDir().GetZenith();
+  return 0.6 * sqrt(fLDF->GetSignal(rho, zenith, false, ldf_parameters_));
+}
+
+
+double I3LaputopSignalModel::GetTopSigmaSignal(double signal, double rho) const {
+
+  double a[2]     = {-.5519, -.078};
+  double b[3]     = {-.373, -.658, .158};
+  double trans[2] = {.340, 2.077};
+  	 
+  if(signal>trans[1]) signal=trans[1]; 
+    if (signal<trans[0]) {
+      return pow(10, a[0] + a[1] * signal);
+    }
+  else return pow(10, b[0] + b[1] * signal + b[2]*signal*signal);
+}
+
+
+I3ParameterMapPtr I3LaputopSignalModel::GuessParameters(
+  const I3Particle& axis,
+  I3RecoPulseSeriesMapConstPtr hlcs,
+  I3RecoPulseSeriesMapConstPtr slcs) const {
+  
+  double log_charge = 0;
+  int pulses = 0;
+  if (hlcs) {
+    for (I3RecoPulseSeriesMap::const_iterator pIt = hlcs->begin();
+         pIt != hlcs->end(); ++pIt) {
+      for (I3RecoPulseSeries::const_iterator it = pIt->second.begin();
+           it != pIt->second.end(); ++it) {
+        log_charge += log10(it->GetCharge());
+        pulses += 1;
+      }
+    }
+  }
+  if (slcs) {
+    for (I3RecoPulseSeriesMap::const_iterator pIt = slcs->begin();
+         pIt != slcs->end(); ++pIt) {
+      for (I3RecoPulseSeries::const_iterator it = pIt->second.begin();
+           it != pIt->second.end(); ++it) {
+        log_charge += log10(it->GetCharge());
+        pulses += 1;
+      }
+    }
+  }
+
+  log_charge /= pulses;
+
+  I3Vector<double> parameters = default_parameters_;
+  parameters[0] = log_charge;
+  parameters[1] = 2.;
+  //parameters[5] = 125.;
+  parameters[18] = 0.30264;
+  //parameters[19] = 118.1;
+  //parameters[20] = 19.41;
+  
+  log_trace("Guessing parameters");
+  for (unsigned int i = 0; i != parameters.size(); ++i) {
+    log_trace("   - par_[%d] = %f", i, parameters[i]);
+  }
+
+  return I3ParameterMapPtr(new I3ParameterMap("LaputopSignalModel", parameters, parameter_names_));
+}
+
+
+double I3LaputopSignalModel::CalcChi2(
+  const I3RockBall& ball,
+  const I3EventHypothesis& hypo,
+  double signal) const {	
+
+  const I3TankGeo tankGeo = *(ball.GetTankGeo());
+  const I3VEMCalibration vemCalib = *(ball.GetVEMCalibration());
+  const I3Position pos = *(ball.GetPosition());
+  const bool saturated = ball.GetSaturatedStatus();
+  double rho = rock_bottom::GetDistToAxis(*particle_, pos);
+  double expectedSignal = fLDF->GetLogSignal(rho, 0, false, ldf_parameters_);
+  const double core_radius_ = std::max(5.0,ldf_parameters_->GetParameterByName("r_ref") * 
+  pow(10, -ldf_parameters_->GetParameterByName("Beta")/(2.*ldf_parameters_->GetParameterByName("Kappa"))));
+
+  double sigma = 0;
+  if (snow_service_) {
+    if (!saturated) {
+      const double snow_depth = tankGeo.snowheight;	
+      expectedSignal = snow_service_->CalculateAttenuatedLogS(expectedSignal, pos, snow_depth, hypo.particle,ldf_parameters_);
+    }
+  }
+  if (rho >= core_radius_) {
+    sigma = GetTopSigmaSignal(expectedSignal, rho);
+  } else {
+    sigma = GetTopSigmaSignal(expectedSignal, core_radius_);
+  }
+  if (saturated){
+    const double sigma_sat = GetTopSigmaSignal(expectedSignal, rho);
+    const double SAT_LG = 90000.;
+    const double pe_per_vem = vemCalib.pePerVEM/vemCalib.corrFactor;
+    const double lg_sat = SAT_LG/pe_per_vem;
+    const double logsat = log10(SAT_LG/pe_per_vem);
+    const double p_sat = 0.5*(1.- erf((logsat-log10(signal))/sqrt(2.)/sigma_sat) );
+    return p_sat;
+   } else {
+    const double delta = (log10(signal) - expectedSignal)/sigma;
+    const double chi2 = delta*delta;
+    return chi2;
+   }
+}
