@@ -12,7 +12,8 @@ Feel free to download and run these yourself!  These are an example of some plot
 
 Open_iPython:
 Feel free to download and run these yourself!  This is a set of scripts that are an example of my use of machine learning to estimate the cosmic ray flux.  There are 4 parts to this works
-  *StepA:  Two part code where simulation or data is extracted from HDF files and all key information is stored in Pickle files
-  *StepB:  Takes the simulation and trains the machine
-  *StepC:  The trained regression model is then applied to the data to return estimate values of energy and mass.
-  *StepD:  Plot everything 
+
+* StepA:  Two part code where simulation or data is extracted from HDF files and all key information is stored in Pickle files
+* StepB:  Takes the simulation and trains the machine
+* StepC:  The trained regression model is then applied to the data to return estimate values of energy and mass.
+* StepD:  Plot everything 
